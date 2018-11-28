@@ -9,6 +9,9 @@ ifeq ($(CONFIG_FB_MSM_MDSS_MDP3), y)
 ccflags-y += -DTARGET_HW_MDSS_MDP3
 endif
 mdss-mdp-objs := mdss_mdp.o mdss_mdp_ctl.o mdss_mdp_pipe.o mdss_mdp_util.o dsi_status_6g.o
+ifeq ($(CONFIG_MACH_ZUK_Z2_ROW), y)
+mdss-mdp-objs += lcd_effect.o
+endif
 mdss-mdp-objs += mdss_mdp_pp.o mdss_mdp_pp_debug.o mdss_mdp_pp_cache_config.o
 mdss-mdp-objs += mdss_mdp_intf_video.o
 mdss-mdp-objs += mdss_mdp_intf_cmd.o
@@ -74,3 +77,5 @@ obj-$(CONFIG_FB_MSM_QPIC_ILI_QVGA_PANEL) += qpic_panel_ili_qvga.o
 
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_fb.o mdss_util.o
 obj-$(CONFIG_COMPAT) += mdss_compat_utils.o
+obj-$(CONFIG_FB_MSM_MDSS_KCAL_CTRL) += mdss_mdp_kcal_ctrl.o
+obj-$(CONFIG_FB_MSM_MDSS) += mdss_livedisplay.o

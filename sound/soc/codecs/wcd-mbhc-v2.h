@@ -248,6 +248,7 @@ struct wcd_mbhc_config {
 	bool detect_extn_cable;
 	bool mono_stero_detection;
 	bool (*swap_gnd_mic)(struct snd_soc_codec *codec);
+	bool (*default_gnd_mic)(struct snd_soc_codec *codec);
 	bool hs_ext_micbias;
 	bool gnd_det_en;
 	int key_code[WCD_MBHC_KEYCODE_NUM];
@@ -256,6 +257,7 @@ struct wcd_mbhc_config {
 	int mbhc_micbias;
 	int anc_micbias;
 	bool enable_anc_mic_detect;
+	struct regulator *vdd;
 };
 
 struct wcd_mbhc_intr {
@@ -371,6 +373,10 @@ struct wcd_mbhc {
 	int buttons_pressed;
 	struct wcd_mbhc_config *mbhc_cfg;
 	const struct wcd_mbhc_cb *mbhc_cb;
+#ifdef CONFIG_MACH_ZUK_MSM8996
+	struct delayed_work mbhc_btn_delay_dwork;
+	bool ignore_btn_intr;
+#endif
 
 	u32 hph_status; /* track headhpone status */
 	u8 hphlocp_cnt; /* headphone left ocp retry */

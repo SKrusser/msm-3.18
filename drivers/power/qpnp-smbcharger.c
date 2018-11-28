@@ -352,6 +352,7 @@ enum wake_reason {
 #define	SHUTDOWN_WORKAROUND_ICL_VOTER "SHUTDOWN_WORKAROUND_ICL_VOTER"
 #define	PARALLEL_ICL_VOTER	"PARALLEL_ICL_VOTER"
 
+#define SUPPORT_ONLY_5V_CHARGER
 /* USB SUSPEND VOTERS */
 /* userspace has suspended charging altogether */
 #define USER_EN_VOTER		"USER_EN_VOTER"
@@ -4024,6 +4025,7 @@ struct regulator_ops smbchg_otg_reg_ops = {
 #define USBIN_ADAPTER_9V		0x3
 #define USBIN_ADAPTER_5V_9V_CONT	0x2
 #define USBIN_ADAPTER_5V_UNREGULATED_9V	0x5
+#define USBIN_ADAPTER_5V		0x0
 static int smbchg_external_otg_regulator_enable(struct regulator_dev *rdev)
 {
 	int rc = 0;
@@ -4052,10 +4054,15 @@ static int smbchg_external_otg_regulator_enable(struct regulator_dev *rdev)
 		dev_err(chip->dev, "Couldn't disable HVDCP rc=%d\n", rc);
 		return rc;
 	}
-
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	rc = smbchg_sec_masked_write(chip,
+				chip->usb_chgpth_base + USBIN_CHGR_CFG,
+				0xFF, USBIN_ADAPTER_5V);
+#else
 	rc = smbchg_sec_masked_write(chip,
 				chip->usb_chgpth_base + USBIN_CHGR_CFG,
 				0xFF, USBIN_ADAPTER_9V);
+#endif
 	if (rc < 0) {
 		dev_err(chip->dev, "Couldn't write usb allowance rc=%d\n", rc);
 		return rc;
@@ -4082,6 +4089,23 @@ static int smbchg_external_otg_regulator_disable(struct regulator_dev *rdev)
 	 * input.
 	 */
 	rc = vote(chip->hvdcp_enable_votable, HVDCP_OTG_VOTER, false, 1);
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	rc = smbchg_sec_masked_write(chip,
+				chip->usb_chgpth_base + CHGPTH_CFG,
+				HVDCP_EN_BIT, 0);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't disable HVDCP rc=%d\n", rc);
+		return rc;
+	}
+
+	rc = smbchg_sec_masked_write(chip,
+				chip->usb_chgpth_base + USBIN_CHGR_CFG,
+				0xFF, USBIN_ADAPTER_5V);
+#else
+	rc = smbchg_sec_masked_write(chip,
+				chip->usb_chgpth_base + CHGPTH_CFG,
+				HVDCP_EN_BIT, HVDCP_EN_BIT);
+#endif
 	if (rc < 0) {
 		dev_err(chip->dev, "Couldn't enable HVDCP rc=%d\n", rc);
 		return rc;
@@ -4659,7 +4683,7 @@ static int smbchg_set_optimal_charging_mode(struct smbchg_chip *chip, int type)
 static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 						enum power_supply_type type)
 {
-	int rc, current_limit_ma;
+	int rc, current_limit_ma = DEFAULT_SDP_MA;
 	union power_supply_propval propval;
 
 	/*
@@ -4836,11 +4860,17 @@ static void restore_from_hvdcp_detection(struct smbchg_chip *chip)
 	if (rc < 0)
 		pr_err("Couldn't configure HVDCP 9V rc=%d\n", rc);
 
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	/* disable HVDCP */
+	rc = vote(chip->hvdcp_enable_votable, HVDCP_PULSING_VOTER, true, 0);
+	if (rc < 0)
+		pr_err("Couldn't disable HVDCP rc=%d\n", rc);
+#else
 	/* enable HVDCP */
 	rc = vote(chip->hvdcp_enable_votable, HVDCP_PULSING_VOTER, false, 1);
 	if (rc < 0)
 		pr_err("Couldn't enable HVDCP rc=%d\n", rc);
-
+#endif
 	/* enable APSD */
 	rc = smbchg_sec_masked_write(chip,
 				chip->usb_chgpth_base + APSD_CFG,
@@ -4849,9 +4879,15 @@ static void restore_from_hvdcp_detection(struct smbchg_chip *chip)
 		pr_err("Couldn't enable APSD rc=%d\n", rc);
 
 	/* Reset back to 5V unregulated */
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	rc = smbchg_sec_masked_write(chip,
+		chip->usb_chgpth_base + USBIN_CHGR_CFG,
+		ADAPTER_ALLOWANCE_MASK, USBIN_ADAPTER_5V);
+#else
 	rc = smbchg_sec_masked_write(chip,
 		chip->usb_chgpth_base + USBIN_CHGR_CFG,
 		ADAPTER_ALLOWANCE_MASK, USBIN_ADAPTER_5V_UNREGULATED_9V);
+#endif
 	if (rc < 0)
 		pr_err("Couldn't write usb allowance rc=%d\n", rc);
 
@@ -4918,7 +4954,7 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 	/* cancel/wait for hvdcp pending work if any */
 	cancel_delayed_work_sync(&chip->hvdcp_det_work);
 	smbchg_relax(chip, PM_DETECT_HVDCP);
-	smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_UNKNOWN);
+	smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_USB);
 
 	if (chip->parallel.use_parallel_aicl) {
 		complete_all(&chip->hvdcp_det_done);
@@ -5130,7 +5166,7 @@ close_time:
 }
 
 #define AICL_IRQ_LIMIT_SECONDS	60
-#define AICL_IRQ_LIMIT_COUNT	25
+#define AICL_IRQ_LIMIT_COUNT	35
 static void increment_aicl_count(struct smbchg_chip *chip)
 {
 	bool bad_charger = false;
@@ -5319,11 +5355,18 @@ static int fake_insertion_removal(struct smbchg_chip *chip, bool insertion)
 
 	pr_smb(PR_MISC, "Allow only %s charger\n",
 			insertion ? "5-9V" : "9V only");
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	rc = smbchg_sec_masked_write(chip,
+			chip->usb_chgpth_base + USBIN_CHGR_CFG,
+			ADAPTER_ALLOWANCE_MASK,
+			USBIN_ADAPTER_5V);
+#else
 	rc = smbchg_sec_masked_write(chip,
 			chip->usb_chgpth_base + USBIN_CHGR_CFG,
 			ADAPTER_ALLOWANCE_MASK,
 			insertion ?
 			USBIN_ADAPTER_5V_9V_CONT : USBIN_ADAPTER_9V);
+#endif
 	if (rc < 0) {
 		pr_err("Couldn't write usb allowance rc=%d\n", rc);
 		return rc;
@@ -5507,6 +5550,17 @@ static int smbchg_unprepare_for_pulsing(struct smbchg_chip *chip)
 		return rc;
 	}
 
+#ifdef SUPPORT_ONLY_5V_CHARGER
+	/* disable HVDCP */
+	pr_smb(PR_MISC, "Disable HVDCP\n");
+	rc = smbchg_sec_masked_write(chip,
+				chip->usb_chgpth_base + CHGPTH_CFG,
+				HVDCP_EN_BIT, 0);
+	if (rc < 0) {
+		pr_err("Couldn't disable HVDCP rc=%d\n", rc);
+		return rc;
+	}
+#else
 	/* enable HVDCP */
 	pr_smb(PR_MISC, "Enable HVDCP\n");
 	rc = vote(chip->hvdcp_enable_votable, HVDCP_PULSING_VOTER, false, 1);
@@ -5514,7 +5568,7 @@ static int smbchg_unprepare_for_pulsing(struct smbchg_chip *chip)
 		pr_err("Couldn't enable HVDCP rc=%d\n", rc);
 		return rc;
 	}
-
+#endif
 	/* enable APSD */
 	pr_smb(PR_MISC, "Enabling APSD\n");
 	rc = smbchg_sec_masked_write(chip,
@@ -6188,6 +6242,7 @@ static int smbchg_battery_set_property(struct power_supply *psy,
 		rc = vote(chip->dc_suspend_votable, USER_EN_VOTER,
 				!val->intval, 0);
 		chip->chg_enabled = val->intval;
+		power_supply_changed(chip->usb_psy);
 		schedule_work(&chip->usb_set_online_work);
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:

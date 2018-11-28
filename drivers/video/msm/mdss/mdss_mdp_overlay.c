@@ -1839,6 +1839,10 @@ int mdss_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
 	} else if (mode == MIPI_VIDEO_PANEL) {
 		if (ctl->ops.wait_pingpong)
 			rc = ctl->ops.wait_pingpong(ctl, NULL);
+		if (rc) {
+			pr_err("wait for pp failed\n");
+			return rc;
+                }
 		mdss_mdp_update_panel_info(mfd, 0, 0);
 		mdss_mdp_switch_to_vid_mode(ctl, 1);
 		mdss_mdp_ctl_stop(ctl, MDSS_PANEL_POWER_OFF);
@@ -6634,10 +6638,6 @@ int mdss_mdp_overlay_init(struct msm_fb_data_type *mfd)
 		mdp5_data->mdata->has_bwc = false;
 
 	mfd->panel_orientation = mfd->panel_info->panel_orientation;
-
-	if ((mfd->panel_info->panel_orientation & MDP_FLIP_LR) &&
-	    (mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY))
-		mdp5_data->mixer_swap = true;
 
 	rc = sysfs_create_group(&dev->kobj, &mdp_overlay_sysfs_group);
 	if (rc) {
